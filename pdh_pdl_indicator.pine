@@ -1,0 +1,257 @@
+//@version=6
+indicator('PDH/PDL Levels', 'PDH/PDL Levels', overlay=true, max_labels_count=500, max_lines_count=500)
+
+//---------------------------------------------------------------------------------------------------------------------}
+//CONSTANTS & INPUTS
+//---------------------------------------------------------------------------------------------------------------------{
+SOLID                           = '⎯⎯⎯'
+DASHED                          = '----'
+DOTTED                          = '····'
+
+BLUE                            = #2157f3
+GREEN                           = #089981
+RED                             = #F23645
+GRAY                            = #878b94
+
+// Inputs for Daily levels
+showDailyLevelsInput            = input.bool(false, 'Daily', group='Daily Levels', inline='daily')
+dailyLevelsStyleInput           = input.string(DASHED, '', group='Daily Levels', inline='daily', options=[SOLID, DASHED, DOTTED])
+dailyLevelsColorInput           = input.color(BLUE, '', group='Daily Levels', inline='daily')
+
+// Input for showing taken levels
+showTakenLevelsInput            = input.bool(false, 'Show Taken Levels', group='Memory', tooltip='Display previously taken liquidity levels')
+
+//---------------------------------------------------------------------------------------------------------------------}
+//VARIABLES
+//---------------------------------------------------------------------------------------------------------------------{
+// Storage for taken levels
+var array<float> takenHighs = array.new<float>()
+var array<float> takenLows = array.new<float>()
+var array<int> takenHighTimes = array.new<int>()
+var array<int> takenLowTimes = array.new<int>()
+
+// Current levels
+var line currentPDHLine = na
+var line currentPDLLine = na
+var label currentPDHLabel = na
+var label currentPDLLabel = na
+
+// Taken levels display
+var array<line> takenHighLines = array.new<line>()
+var array<line> takenLowLines = array.new<line>()
+var array<label> takenHighLabels = array.new<label>()
+var array<label> takenLowLabels = array.new<label>()
+
+//---------------------------------------------------------------------------------------------------------------------}
+//FUNCTIONS
+//---------------------------------------------------------------------------------------------------------------------{
+// @function            Get line style from string
+// @param style         line style string
+// @returns             line style constant
+getStyle(string style) =>
+    switch style
+        SOLID => line.style_solid
+        DASHED => line.style_dashed
+        DOTTED => line.style_dotted
+
+// @function            Check if price has taken liquidity (broken through level)
+// @param level         price level to check
+// @param isHigh        true for high level, false for low level
+// @returns             bool
+isLiquidityTaken(float level, bool isHigh) =>
+    if isHigh
+        high > level
+    else
+        low < level
+
+// @function            Draw current PDH/PDL levels
+// @param highLevel     PDH level
+// @param lowLevel      PDL level
+// @param highTime      PDH time
+// @param lowTime       PDL time
+// @returns             void
+drawCurrentLevels(float highLevel, float lowLevel, int highTime, int lowTime) =>
+    // Delete previous lines and labels
+    if not na(currentPDHLine)
+        line.delete(currentPDHLine)
+    if not na(currentPDLLine)
+        line.delete(currentPDLLine)
+    if not na(currentPDHLabel)
+        label.delete(currentPDHLabel)
+    if not na(currentPDLLabel)
+        label.delete(currentPDLLabel)
+
+    // Calculate line end time (extend 20 bars to the right)
+    rightTime = last_bar_time + 20 * (time - time[1])
+    
+    // Calculate middle point for labels
+    middleTime = math.round((highTime + rightTime) / 2)
+    middleTimeLow = math.round((lowTime + rightTime) / 2)
+
+    // Draw PDH line and label
+    currentPDHLine := line.new(
+        chart.point.new(highTime, na, highLevel),
+        chart.point.new(rightTime, na, highLevel),
+        xloc=xloc.bar_time,
+        color=dailyLevelsColorInput,
+        style=getStyle(dailyLevelsStyleInput)
+    )
+    
+    currentPDHLabel := label.new(
+        chart.point.new(middleTime, na, highLevel),
+        'PDH',
+        xloc=xloc.bar_time,
+        color=color(na),
+        textcolor=dailyLevelsColorInput,
+        style=label.style_label_left,
+        size=size.small
+    )
+
+    // Draw PDL line and label
+    currentPDLLine := line.new(
+        chart.point.new(lowTime, na, lowLevel),
+        chart.point.new(rightTime, na, lowLevel),
+        xloc=xloc.bar_time,
+        color=dailyLevelsColorInput,
+        style=getStyle(dailyLevelsStyleInput)
+    )
+    
+    currentPDLLabel := label.new(
+        chart.point.new(middleTimeLow, na, lowLevel),
+        'PDL',
+        xloc=xloc.bar_time,
+        color=color(na),
+        textcolor=dailyLevelsColorInput,
+        style=label.style_label_left,
+        size=size.small
+    )
+
+// @function            Store taken level
+// @param level         price level that was taken
+// @param isHigh        true for high level, false for low level
+// @param takenTime     time when level was taken
+// @returns             void
+storeTakenLevel(float level, bool isHigh, int takenTime) =>
+    if isHigh
+        array.push(takenHighs, level)
+        array.push(takenHighTimes, takenTime)
+    else
+        array.push(takenLows, level)
+        array.push(takenLowTimes, takenTime)
+
+// @function            Draw taken levels
+// @returns             void
+drawTakenLevels() =>
+    // Clear previous taken level displays
+    for i = 0 to array.size(takenHighLines) - 1
+        line.delete(array.get(takenHighLines, i))
+    for i = 0 to array.size(takenLowLines) - 1
+        line.delete(array.get(takenLowLines, i))
+    for i = 0 to array.size(takenHighLabels) - 1
+        label.delete(array.get(takenHighLabels, i))
+    for i = 0 to array.size(takenLowLabels) - 1
+        label.delete(array.get(takenLowLabels, i))
+    
+    array.clear(takenHighLines)
+    array.clear(takenLowLines)
+    array.clear(takenHighLabels)
+    array.clear(takenLowLabels)
+
+    if showTakenLevelsInput
+        // Draw taken highs
+        for i = 0 to array.size(takenHighs) - 1
+            level = array.get(takenHighs, i)
+            takenTime = array.get(takenHighTimes, i)
+            
+            takenLine := line.new(
+                chart.point.new(takenTime, na, level),
+                chart.point.new(takenTime, na, level),
+                xloc=xloc.bar_time,
+                color=color.new(dailyLevelsColorInput, 50),
+                style=line.style_dashed,
+                width=1
+            )
+            array.push(takenHighLines, takenLine)
+            
+            takenLabel := label.new(
+                chart.point.new(takenTime, na, level),
+                'Taken PDH',
+                xloc=xloc.bar_time,
+                color=color(na),
+                textcolor=color.new(dailyLevelsColorInput, 30),
+                style=label.style_label_down,
+                size=size.tiny
+            )
+            array.push(takenHighLabels, takenLabel)
+
+        // Draw taken lows
+        for i = 0 to array.size(takenLows) - 1
+            level = array.get(takenLows, i)
+            takenTime = array.get(takenLowTimes, i)
+            
+            takenLine := line.new(
+                chart.point.new(takenTime, na, level),
+                chart.point.new(takenTime, na, level),
+                xloc=xloc.bar_time,
+                color=color.new(dailyLevelsColorInput, 50),
+                style=line.style_dashed,
+                width=1
+            )
+            array.push(takenLowLines, takenLine)
+            
+            takenLabel := label.new(
+                chart.point.new(takenTime, na, level),
+                'Taken PDL',
+                xloc=xloc.bar_time,
+                color=color(na),
+                textcolor=color.new(dailyLevelsColorInput, 30),
+                style=label.style_label_up,
+                size=size.tiny
+            )
+            array.push(takenLowLabels, takenLabel)
+
+// @function            Draw Daily levels with liquidity tracking
+// @returns             void
+drawDailyLevels() =>
+    // Get previous day's high and low
+    [prevHigh, prevLow, prevHighTime, prevLowTime] = request.security(
+        syminfo.tickerid, 
+        '1D', 
+        [high[1], low[1], time[1], time[1]], 
+        lookahead=barmerge.lookahead_off
+    )
+    
+    // Check if we have valid data
+    if not na(prevHigh) and not na(prevLow)
+        // Check if current levels have been taken
+        highTaken = isLiquidityTaken(prevHigh, true)
+        lowTaken = isLiquidityTaken(prevLow, false)
+        
+        // Store taken levels
+        if highTaken
+            storeTakenLevel(prevHigh, true, time)
+        if lowTaken
+            storeTakenLevel(prevLow, false, time)
+        
+        // Draw current levels only if not taken
+        if not highTaken and not lowTaken
+            drawCurrentLevels(prevHigh, prevLow, prevHighTime, prevLowTime)
+        else if not highTaken
+            // Only draw PDH if PDL was taken
+            drawCurrentLevels(prevHigh, na, prevHighTime, na)
+        else if not lowTaken
+            // Only draw PDL if PDH was taken
+            drawCurrentLevels(na, prevLow, na, prevLowTime)
+    
+    // Draw taken levels if enabled
+    drawTakenLevels()
+
+//---------------------------------------------------------------------------------------------------------------------}
+//MAIN EXECUTION
+//---------------------------------------------------------------------------------------------------------------------{
+if showDailyLevelsInput
+    drawDailyLevels()
+
+// Update taken levels display on every bar
+if showTakenLevelsInput
+    drawTakenLevels()

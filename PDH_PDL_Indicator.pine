@@ -1,0 +1,130 @@
+//@version=6
+indicator('PDH/PDL Levels', 'PDH/PDL', overlay=true, max_lines_count=500, max_labels_count=500)
+
+//---------------------------------------------------------------------------------------------------------------------}
+//INPUTS
+//---------------------------------------------------------------------------------------------------------------------{
+LEVELS_GROUP = 'Highs & Lows MTF'
+
+SOLID = '⎯⎯⎯'
+DASHED = '----'
+DOTTED = '····'
+
+showDailyLevelsInput = input.bool(false, 'Daily', group=LEVELS_GROUP, inline='daily')
+dailyLevelsStyleInput = input.string(SOLID, '', group=LEVELS_GROUP, inline='daily', options=[SOLID, DASHED, DOTTED])
+dailyLevelsColorInput = input.color(color.blue, '', group=LEVELS_GROUP, inline='daily')
+
+showTakenLevelsInput = input.bool(false, 'Show Taken Levels', group=LEVELS_GROUP, tooltip='Display taken liquidity levels in a table')
+
+//---------------------------------------------------------------------------------------------------------------------}
+//CONSTANTS & VARIABLES
+//---------------------------------------------------------------------------------------------------------------------{
+BLUE = color.blue
+GREEN = color.green
+RED = color.red
+GRAY = color.gray
+
+// Storage for taken levels
+var table takenLevelsTable = table.new(position.top_right, 3, 1, bgcolor=color.white, border_width=1)
+var array<line> activeLines = array.new<line>()
+var array<label> activeLabels = array.new<label>()
+
+//---------------------------------------------------------------------------------------------------------------------}
+//FUNCTIONS
+//---------------------------------------------------------------------------------------------------------------------{
+// Get line style from string
+getStyle(string style) =>
+    switch style
+        SOLID => line.style_solid
+        DASHED => line.style_dashed
+        DOTTED => line.style_dotted
+
+// Check if timeframe is higher than daily
+higherTimeframe(string timeframe) => timeframe.in_seconds() > timeframe.in_seconds('1D')
+
+// Draw Daily levels
+drawDailyLevels() =>
+    [topLevel, bottomLevel, leftTime, rightTime] = request.security(syminfo.tickerid, '1D', [high[1], low[1], time[1], time], lookahead=barmerge.lookahead_on)
+    
+    float parsedTop = topLevel
+    float parsedBottom = bottomLevel
+    int parsedLeftTime = leftTime
+    int parsedRightTime = rightTime
+    
+    // Create PDH line and label
+    var line pdhLine = line.new(na, na, na, na, xloc=xloc.bar_time, color=dailyLevelsColorInput, style=getStyle(dailyLevelsStyleInput))
+    var label pdhLabel = label.new(na, na, text='PDH', xloc=xloc.bar_time, color=color(na), textcolor=dailyLevelsColorInput, size=size.small, style=label.style_label_left)
+    
+    // Create PDL line and label  
+    var line pdlLine = line.new(na, na, na, na, xloc=xloc.bar_time, color=dailyLevelsColorInput, style=getStyle(dailyLevelsStyleInput))
+    var label pdlLabel = label.new(na, na, text='PDL', xloc=xloc.bar_time, color=color(na), textcolor=dailyLevelsColorInput, size=size.small, style=label.style_label_left)
+    
+    // Set PDH line points (center the label)
+    pdhLine.set_first_point(chart.point.new(parsedLeftTime, na, parsedTop))
+    pdhLine.set_second_point(chart.point.new(last_bar_time + 20 * (time - time[1]), na, parsedTop))
+    pdhLabel.set_point(chart.point.new(parsedLeftTime + (last_bar_time - parsedLeftTime) / 2, na, parsedTop))
+    
+    // Set PDL line points (center the label)
+    pdlLine.set_first_point(chart.point.new(parsedLeftTime, na, parsedBottom))
+    pdlLine.set_second_point(chart.point.new(last_bar_time + 20 * (time - time[1]), na, parsedBottom))
+    pdlLabel.set_point(chart.point.new(parsedLeftTime + (last_bar_time - parsedLeftTime) / 2, na, parsedBottom))
+    
+    // Store lines for liquidity checking
+    array.push(activeLines, pdhLine)
+    array.push(activeLines, pdlLine)
+    array.push(activeLabels, pdhLabel)
+    array.push(activeLabels, pdlLabel)
+    
+    // Check for liquidity taken
+    checkLiquidityTaken(parsedTop, parsedBottom, parsedLeftTime)
+
+// Check if liquidity has been taken
+checkLiquidityTaken(float pdhLevel, float pdlLevel, int startTime) =>
+    // Check if PDH (resistance) was broken above
+    if high > pdhLevel
+        // Add to taken levels table
+        addToTakenLevelsTable('PDH', pdhLevel, time)
+        // Remove PDH line and label
+        removeLevelFromChart(0, 1) // PDH is first in arrays
+    
+    // Check if PDL (support) was broken below  
+    if low < pdlLevel
+        // Add to taken levels table
+        addToTakenLevelsTable('PDL', pdlLevel, time)
+        // Remove PDL line and label
+        removeLevelFromChart(2, 3) // PDL is second in arrays
+
+// Add taken level to table
+addToTakenLevelsTable(string levelType, float levelPrice, int takenTime) =>
+    if showTakenLevelsInput
+        table.cell(takenLevelsTable, 0, 0, 'Level', text_color=color.black, bgcolor=color.gray)
+        table.cell(takenLevelsTable, 1, 0, 'Price', text_color=color.black, bgcolor=color.gray)
+        table.cell(takenLevelsTable, 2, 0, 'Time', text_color=color.black, bgcolor=color.gray)
+        
+        // Add new row
+        table.insert_row(takenLevelsTable, 1)
+        table.cell(takenLevelsTable, 0, 1, levelType, text_color=color.black)
+        table.cell(takenLevelsTable, 1, 1, str.tostring(levelPrice, '#.##'), text_color=color.black)
+        table.cell(takenLevelsTable, 2, 1, str.format_time(takenTime, 'yyyy-MM-dd HH:mm'), text_color=color.black)
+
+// Remove level from chart
+removeLevelFromChart(int lineIndex, int labelIndex) =>
+    if array.size(activeLines) > lineIndex
+        line.delete(array.get(activeLines, lineIndex))
+        array.remove(activeLines, lineIndex)
+    
+    if array.size(activeLabels) > labelIndex
+        label.delete(array.get(activeLabels, labelIndex))
+        array.remove(activeLabels, labelIndex)
+
+//---------------------------------------------------------------------------------------------------------------------}
+//MAIN EXECUTION
+//---------------------------------------------------------------------------------------------------------------------{
+if barstate.islastconfirmedhistory or barstate.islast
+    if showDailyLevelsInput and not higherTimeframe('1D')
+        drawDailyLevels()
+
+// Clear arrays on new bar
+if barstate.isconfirmed
+    array.clear(activeLines)
+    array.clear(activeLabels)
